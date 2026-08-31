@@ -15,6 +15,7 @@ from mcp.server.fastmcp import FastMCP
 from .client import AzProClient, client_from_env
 from .models import ToolEnvelope
 from .shop_profile import (
+    bootstrap_from_session,
     format_shop_line,
     load_shop_profile,
     profile_complete,
@@ -127,6 +128,8 @@ async def get_session_status() -> dict:
         data = get_client().get_session_status()
         data["elapsed_ms"] = data.get("elapsed_ms") or int((time.time() - t0) * 1000)
         logged = bool(data.get("logged_in") or data.get("ok"))
+        if logged:
+            bootstrap_from_session(data)
         shop = load_shop_profile()
         data["shop_profile"] = shop
         data["shop_profile_needed"] = not profile_complete(shop)
@@ -175,16 +178,17 @@ async def list_vehicles() -> dict:
 
 
 @mcp.tool()
-async def lookup_plate(plate: str, state: str = "FL", bind: bool = True) -> dict:
+async def lookup_plate(plate: str, state: str = "", bind: bool = True) -> dict:
     """Decode a license plate via AutoZone Pro and bind sticky ACES for parts search.
 
     ALWAYS use this when the user gives a plate/tag — do NOT use the sticky/current
-    garage vehicle. state defaults to FL. bind=True sets in-process ACES so
-    search_parts / list_group_products fit the decoded car.
+    garage vehicle. state defaults to the local shop profile, else FL.
+    bind=True sets in-process ACES so search_parts / list_group_products fit the decoded car.
     """
 
     def _do():
-        data = get_client().lookup_plate(plate, state=state, bind=bind)
+        st = (state or "").strip() or load_shop_profile().get("state") or "FL"
+        data = get_client().lookup_plate(plate, state=st, bind=bind)
         primary = data.get("primary") or {}
         return ToolEnvelope(
             ok=bool(data.get("ok")),
@@ -568,14 +572,14 @@ async def set_shop_profile(
     zip: str = "",
     phone: str = "",
 ) -> dict:
-    """Save local garage identity (any shop). Not uploaded; not an AutoZone login.
+    """Merge local garage identity. Empty arguments do not clear saved fields.
 
-    Call on first run after asking the user — or confirming suggested_shop from
-    get_session_status. garage_name is required.
+    Not uploaded; not an AutoZone login. git pull never touches this file.
+    garage_name required only when no profile exists yet.
     """
 
     def _do():
-        if not (garage_name or "").strip():
+        if not (garage_name or "").strip() and not profile_complete():
             return ToolEnvelope(
                 ok=False,
                 error_code="invalid_args",
@@ -650,23 +654,33 @@ async def import_browser_cookies(browser: str) -> dict:
 
 
 def _maybe_first_run_setup(*, force: bool = False) -> None:
-    if profile_complete() and not force:
+    existing = load_shop_profile()
+    if profile_complete(existing) and not force:
         return
-    suggested = {}
+    suggested = dict(existing)
+    status = None
     try:
-        suggested = suggest_from_session(get_client().get_session_status())
+        status = get_client().get_session_status()
+        az = suggest_from_session(status)
+        for k, v in az.items():
+            if v and not (suggested.get(k) or "").strip():
+                suggested[k] = v
     except Exception:
-        suggested = {}
+        status = None
     if force or stdin_is_interactive():
         prompt_shop_profile(suggested)
         apply_instructions()
         return
-    print(
-        "[azpro] Shop profile not set. Ask the user for garage name, AutoZone store number, "
-        "and address (suggestions may be on get_session_status.suggested_shop), "
-        "then call set_shop_profile.",
-        file=sys.stderr,
-    )
+    if status:
+        bootstrap_from_session(status)
+    if not profile_complete():
+        print(
+            "[azpro] Shop profile not set. Ask the user for garage name, AutoZone store number, "
+            "and address (suggestions may be on get_session_status.suggested_shop), "
+            "then call set_shop_profile. Existing ~/.config/autozonepro/shop.json is never "
+            "overwritten by git pull.",
+            file=sys.stderr,
+        )
 
 
 def run_server() -> None:

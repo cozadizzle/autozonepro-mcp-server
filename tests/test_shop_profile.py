@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from azpro_mcp_server.server import build_instructions, mcp
 from azpro_mcp_server.shop_profile import (
+    bootstrap_from_session,
     format_shop_line,
     load_shop_profile,
     profile_complete,
@@ -79,6 +80,47 @@ def test_first_run_prompt_keeps_suggestions(tmp_path, monkeypatch):
     assert saved["store_number"] == "9999"
     assert saved["city"] == "Austin"
     assert saved["state"] == "TX"
+
+
+def test_merge_does_not_blank_existing(tmp_path, monkeypatch):
+    monkeypatch.setenv("AZPRO_SHOP_FILE", str(tmp_path / "shop.json"))
+    save_shop_profile(
+        {
+            "garage_name": "Keep Me Garage",
+            "store_number": "1111",
+            "address": "9 Oak",
+            "city": "Austin",
+            "state": "TX",
+            "zip": "78701",
+        }
+    )
+    merged = save_shop_profile({"store_number": "2222", "address": "", "garage_name": ""})
+    assert merged["garage_name"] == "Keep Me Garage"
+    assert merged["store_number"] == "2222"
+    assert merged["address"] == "9 Oak"
+    assert merged["city"] == "Austin"
+
+
+def test_bootstrap_fills_empty_only(tmp_path, monkeypatch):
+    monkeypatch.setenv("AZPRO_SHOP_FILE", str(tmp_path / "shop.json"))
+    save_shop_profile({"garage_name": "Keep Me Garage", "store_number": "1111"})
+    status = {
+        "shop": {
+            "shopName": "SHOULD NOT REPLACE",
+            "shippingAddress": {
+                "address1": "1 Main St",
+                "city": "Springfield",
+                "state": "IL",
+                "postalCode": "62701",
+            },
+        },
+        "current_store": {"number": "9999"},
+    }
+    out = bootstrap_from_session(status)
+    assert out["garage_name"] == "Keep Me Garage"
+    assert out["store_number"] == "1111"
+    assert out["address"] == "1 Main St"
+    assert out["city"] == "Springfield"
 
 
 def test_instructions_generic_without_named_shop(tmp_path, monkeypatch):

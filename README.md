@@ -68,6 +68,8 @@ When the server is launched over MCP stdio (no TTY), the agent should ask you th
 
 Override with `AZPRO_SHOP_FILE`. This is **not** AutoZone login and is **not** committed or uploaded.
 
+**Updates do not wipe a shop.** `git pull` / `pip install -e .` only update code in the clone. Cookies stay at `~/.config/autozonepro_cookies.json`. The shop profile stays at `~/.config/autozonepro/shop.json`. `set_shop_profile` **merges** — empty fields do not clear a name/address already saved. Re-run `--setup` only when you *want* to edit the prompt.
+
 ```bash
 azpro-mcp --setup
 ```

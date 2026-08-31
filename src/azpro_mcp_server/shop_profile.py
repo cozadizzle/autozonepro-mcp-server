@@ -43,19 +43,40 @@ def load_shop_profile() -> Dict[str, str]:
     return out
 
 
-def save_shop_profile(data: Dict[str, Any]) -> Dict[str, str]:
+def save_shop_profile(data: Dict[str, Any], *, clobber_empty: bool = False) -> Dict[str, str]:
+    """Write shop profile. Default is merge: blank/omitted fields do not wipe existing values.
+
+    git pull of this repo never touches this file (it lives under ~/.config).
+    """
     path = shop_file_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    cleaned = _blank()
+    cleaned = load_shop_profile() if path.is_file() else _blank()
+    incoming = data or {}
     for k in SHOP_KEYS:
-        v = data.get(k)
-        cleaned[k] = "" if v is None else str(v).strip()
+        if k not in incoming:
+            continue
+        v = incoming.get(k)
+        s = "" if v is None else str(v).strip()
+        if s:
+            cleaned[k] = s
+        elif clobber_empty:
+            cleaned[k] = ""
     path.write_text(json.dumps(cleaned, indent=2) + "\n", encoding="utf-8")
     try:
         os.chmod(path, 0o600)
     except OSError:
         pass
     return cleaned
+
+
+def bootstrap_from_session(status: Dict[str, Any]) -> Dict[str, str]:
+    """Fill empty profile fields from a live AZ session. Never overwrites a filled field."""
+    existing = load_shop_profile()
+    sug = suggest_from_session(status)
+    to_fill = {k: sug.get(k) or "" for k in SHOP_KEYS if not (existing.get(k) or "").strip() and (sug.get(k) or "").strip()}
+    if not to_fill:
+        return existing
+    return save_shop_profile(to_fill)
 
 
 def profile_complete(data: Optional[Dict[str, str]] = None) -> bool:
