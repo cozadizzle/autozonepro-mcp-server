@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autozonepro-mcp-server"
+version = "0.2.0"
+description = "MCP server for AutoZone Pro: VIN, vehicles, parts search, credit snapshot, invoices, shop session"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Grok User"}]
+dependencies = [
+    "mcp>=1.2.0",
+    "requests>=2.32",
+    "pydantic>=2.7",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "browser-cookie3>=0.19"]
+
+[project.scripts]
+azpro-mcp = "azpro_mcp_server.server:run_server"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

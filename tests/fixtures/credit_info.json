@@ -1,0 +1,22 @@
+{
+  "_comment": "Synthetic AutoZone Pro credit-info shape for unit tests. Not a real account.",
+  "amtDueCurrent": "$12.34",
+  "delinquentDays": "0",
+  "lastPaymentAmt": "-$50.00",
+  "suspensionStatus": "No longer suspended",
+  "lastChargeAmt": "$9.99",
+  "hasCardOnFile": false,
+  "currentBalance": "$1,234.56",
+  "creditStatus": "Open",
+  "accountTypeDesc": "PS - Weekly",
+  "openToBuy": "$98.76",
+  "lastChargeDate": "01/15/2026",
+  "accountId": "REDACTED",
+  "delinquentAmt": "$12.34",
+  "lastStatementAmt": "$0.00",
+  "lastPaymentDate": "01/10/2026",
+  "creditLimit": "$2,000.00",
+  "suspendNotifyDate": "01/20/2026",
+  "links": [],
+  "aodOvrExpireDate": "01/25/2026"
+}

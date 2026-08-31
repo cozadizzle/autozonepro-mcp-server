@@ -1,0 +1,59 @@
+# Secrets / credentials (never commit)
+.env
+.env.*
+*.env
+*_cookies.json
+*cookies.json
+*cookie.json
+secrets/
+credentials/
+*.pem
+*.key
+*.crt
+id_rsa*
+auth.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+.installed.cfg
+pip-wheel-metadata/
+.python-version
+
+# Test / coverage / type
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+nosetests.xml
+coverage.xml
+
+# Tooling / OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+*.log
+
+# Project artifacts
+alldata-screenshots/
+playwright-report/
+test-results/
+/tmp/
