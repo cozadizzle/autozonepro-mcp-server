@@ -8,6 +8,7 @@ import concurrent.futures
 import os
 import sys
 import time
+from datetime import date
 from typing import Any, Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -50,7 +51,13 @@ def build_instructions() -> str:
         "pricing, session/store info, and read-only account credit + invoices/receipts. "
         "ACCOUNT (read-only, never pay bills): get_credit_snapshot for balance, overdue/past-due, "
         "and available credit (one small call). scan_invoices(limit=15, days=90) for a bounded "
-        "transaction-history list (id, date, amount, type) — do not dump unbounded history or PDFs. "
+        "transaction-history list (id, date, amount, type). get_invoice(invoice_id, invoice_date=) "
+        "downloads the commercial PDF and parses line items (part, qty, list, cost, core, total) — "
+        "never invent lines. search_invoices(query=) finds tickets by invoice # / PO / part / vehicle. "
+        "tally_invoices(period='month'|'year', year=YYYY, month=M) sums ticket totals (includes cores, "
+        "returns, payments). get_annual_purchases(year) is AZ's official monthly sales (excludes cores). "
+        "invoice_type INVOICE maps to CMSTINVC (do not pass the word INVOICE as the raw API code). "
+        "PDFs cache under ~/.cache/azpro-invoices — do not commit them. "
         "QUOTE RULE (mandatory): every parts quote shown to the user MUST include BOTH "
         "commercial cost AND list_price side-by-side (per line + parts subtotal + job total). "
         "Never present cost alone. Cost = what the shop pays; list = AZ list/street. "
@@ -487,12 +494,17 @@ async def scan_invoices(
     limit: int = 15,
     days: int = 90,
     invoice_type: str = "",
+    start_date: str = "",
+    end_date: str = "",
+    filter_type: str = "",
+    filter_value: str = "",
 ) -> dict:
     """Scan AutoZone Pro invoices and receipts (transaction history). Bounded list.
 
     Returns identifier, date, amount, and type/status. Default last 90 days and
-    page size `limit` (max 50). Does not download PDFs or line-item payloads.
-    invoice_type optional: INVOICE, RETURN, PAYMENT, ADJUSTMENT, REBATE.
+    page size `limit` (max 15, AZ API cap). invoice_type: INVOICE, RETURN, PAYMENT, ADJUSTMENT,
+    REBATE (mapped to AZ codes). filter_type RENDER_ID (invoice #) or PO with
+    filter_value. For PDFs use get_invoice; for totals use tally_invoices.
     """
 
     def _do():
@@ -500,6 +512,10 @@ async def scan_invoices(
             limit=limit,
             days=days,
             invoice_type=invoice_type or None,
+            start_date=start_date or None,
+            end_date=end_date or None,
+            filter_type=filter_type or None,
+            filter_value=filter_value or None,
         )
         if data.get("logged_in") is False:
             data["auth_lost"] = True
@@ -516,6 +532,176 @@ async def scan_invoices(
             ok=bool(data.get("ok")),
             error_code="ok" if data.get("ok") else "no_hits",
             message=f"{n} invoices/receipts (limit {data.get('limit')})",
+            elapsed_ms=data.get("elapsed_ms") or 0,
+            data=data,
+        ).model_dump()
+
+    return await _run(_do)
+
+
+def _auth_lost(data: dict) -> dict:
+    data["auth_lost"] = True
+    data["user_visible_banner"] = AZPRO_AUTH_LOST_BANNER
+    return ToolEnvelope(
+        ok=False,
+        error_code="not_logged_in",
+        message=AZPRO_AUTH_LOST_BANNER,
+        elapsed_ms=data.get("elapsed_ms") or 0,
+        data=data,
+    ).model_dump()
+
+
+@mcp.tool()
+async def get_invoice(
+    invoice_id: str = "",
+    invoice_date: str = "",
+    pdf_path: str = "",
+    parse: bool = True,
+) -> dict:
+    """Fetch one AutoZone Pro commercial invoice/return PDF and parse line items.
+
+    Pass invoice_id from scan_invoices (prefer the long invoice_id). invoice_date
+    is YYYY-MM-DD; inferred from invoice_id suffix MMDDYY when omitted.
+    pdf_path reads a local PDF instead of downloading. Returns qty, part, list,
+    cost, core, line total, vehicle, tax, ticket total. Never invent pins/lines.
+    """
+
+    def _do():
+        data = get_client().fetch_invoice_pdf(
+            invoice_id or "",
+            invoice_date or None,
+            parse=parse,
+            pdf_path=pdf_path or None,
+        )
+        if data.get("logged_in") is False:
+            return _auth_lost(data)
+        parsed = data.get("parsed") or {}
+        n = int(parsed.get("line_count") or 0)
+        total = parsed.get("total")
+        tot = f"${total:.2f}" if isinstance(total, (int, float)) else "?"
+        ok = bool(data.get("ok"))
+        return ToolEnvelope(
+            ok=ok,
+            error_code="ok" if ok else "no_hits",
+            message=f"{parsed.get('kind') or 'invoice'} {parsed.get('invoice_number') or invoice_id} · {n} lines · {tot}",
+            elapsed_ms=data.get("elapsed_ms") or 0,
+            data=data,
+        ).model_dump()
+
+    return await _run(_do)
+
+
+@mcp.tool()
+async def search_invoices(
+    query: str = "",
+    invoice_type: str = "",
+    days: int = 90,
+    start_date: str = "",
+    end_date: str = "",
+    limit: int = 15,
+    filter_by: str = "auto",
+) -> dict:
+    """Search invoices/returns by invoice #, PO, part number, vehicle, or text.
+
+    Walks transaction history (paginated, capped). filter_by: auto|invoice|po.
+    Does not download PDFs. Use get_invoice for line items of one ticket.
+    """
+
+    def _do():
+        data = get_client().search_invoices(
+            query=query,
+            invoice_type=invoice_type or None,
+            days=days,
+            start_date=start_date or None,
+            end_date=end_date or None,
+            limit=limit,
+            filter_by=filter_by or "auto",
+        )
+        if data.get("logged_in") is False:
+            return _auth_lost(data)
+        n = int(data.get("count") or 0)
+        return ToolEnvelope(
+            ok=bool(data.get("ok")),
+            error_code="ok" if n else "no_hits",
+            message=f"{n} matches for {query!r}" if query else f"{n} invoices",
+            elapsed_ms=data.get("elapsed_ms") or 0,
+            data=data,
+        ).model_dump()
+
+    return await _run(_do)
+
+
+@mcp.tool()
+async def tally_invoices(
+    period: str = "month",
+    year: int = 0,
+    month: int = 0,
+    start_date: str = "",
+    end_date: str = "",
+    days: int = 365,
+    invoice_type: str = "",
+    source: str = "transactions",
+) -> dict:
+    """Sum AutoZone Pro tickets by day, month, or year.
+
+    source=transactions (default): signed ticket totals from history (cores,
+    invoices, returns, payments). source=annual_sales: AZ official monthly
+    sales for `year` (excludes cores — often lower than invoice totals).
+    period: month|year|day. year/month filter the window.
+    """
+
+    def _do():
+        data = get_client().tally_invoices(
+            period=period or "month",
+            year=year or None,
+            month=month or None,
+            start_date=start_date or None,
+            end_date=end_date or None,
+            days=days,
+            invoice_type=invoice_type or None,
+            source=source or "transactions",
+        )
+        if data.get("logged_in") is False:
+            return _auth_lost(data)
+        if (source or "").lower() in ("annual_sales", "annual", "sales"):
+            tot = data.get("total_sales")
+            msg = f"annual sales {data.get('year')} · ${tot:.2f}" if isinstance(tot, (int, float)) else "annual sales"
+        else:
+            tot = data.get("grand_total")
+            n = data.get("count")
+            msg = f"{n} tickets · {period} · ${tot:.2f}" if isinstance(tot, (int, float)) else f"{n} tickets"
+        ok = bool(data.get("ok"))
+        return ToolEnvelope(
+            ok=ok,
+            error_code="ok" if ok else "no_hits",
+            message=msg,
+            elapsed_ms=data.get("elapsed_ms") or 0,
+            data=data,
+        ).model_dump()
+
+    return await _run(_do)
+
+
+@mcp.tool()
+async def get_annual_purchases(year: int = 0) -> dict:
+    """AZ Pro official monthly sales table for a calendar year (excludes cores).
+
+    GET shops/{pin}/sales?year=. Use tally_invoices(source='transactions') when
+    you need returns/payments/cores included.
+    """
+
+    def _do():
+        y = int(year) if year else date.today().year
+        data = get_client().get_annual_purchases(y)
+        if data.get("logged_in") is False:
+            return _auth_lost(data)
+        tot = data.get("total_sales")
+        msg = f"{y} sales ${tot:.2f} (cores excluded)" if isinstance(tot, (int, float)) else f"{y} sales"
+        ok = bool(data.get("ok"))
+        return ToolEnvelope(
+            ok=ok,
+            error_code="ok" if ok else "no_hits",
+            message=msg,
             elapsed_ms=data.get("elapsed_ms") or 0,
             data=data,
         ).model_dump()

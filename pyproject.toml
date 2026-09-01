@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "autozonepro-mcp-server"
-version = "0.2.0"
-description = "MCP server for AutoZone Pro: VIN, vehicles, parts search, credit snapshot, invoices, shop session"
+version = "0.3.0"
+description = "MCP server for AutoZone Pro: VIN, vehicles, parts search, credit snapshot, invoice PDFs, shop session"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -15,6 +15,7 @@ dependencies = [
     "requests>=2.32",
     "pydantic>=2.7",
     "python-dotenv>=1.0",
+    "pypdf>=5.0",
 ]
 
 [project.optional-dependencies]

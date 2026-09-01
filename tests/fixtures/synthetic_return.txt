@@ -1,0 +1,30 @@
+Commercial Return
+Store 00000
+100 EXAMPLE BLVD
+EXAMPLE CITY, ST 00000
+555.555.0000
+Deliver To
+ EXAMPLE SHOP LLC
+ 100 Example Rd
+ Example City, ST 00000
+ Phone : (555) 555-0000
+ Customer # : 00000000
+Order Information
+Return Invoice Number : 00000000002
+Original Invoice Number : 00000000001
+Comm Specialist : EXAMPLE,TECH
+Register Number : 1
+Order Date : 01/16/2026 05:06 PM
+Items
+O Part # QTY Description List Cost Core Total
+No vehicle given for the following items
+UR 43166DG -1 DLG ROTOR Example Gold High Carbon Rotor 
+SKU-000336797
+123.10 53.00 0.00 -53.00
+MSDS can be ordered upon request
+00000000002011626C
+Subtotal -$53.00
+Tax -$3.71
+Piece Count Page Total
+1 1 of 1 -$56.71
+cmstretn_EN_US_2.0.6.py

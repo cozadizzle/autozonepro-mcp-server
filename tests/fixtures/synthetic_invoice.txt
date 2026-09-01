@@ -1,0 +1,41 @@
+Commercial Invoice
+AutoZone Store 00000
+100 EXAMPLE BLVD
+EXAMPLE CITY, ST 00000
+555.555.0000
+Deliver To
+ EXAMPLE SHOP LLC
+ 100 Example Rd
+ Example City, ST 00000
+ Phone : (555) 555-0000
+ Customer # : 00000000
+Order Information
+Invoice Number : 00000000001
+Comm Specialist : COMMERCIAL SALES
+CENTER
+Register Number : 1
+Order Date : 01/15/2026 02:58 PM
+Invoice Due Date : 01/15/2026
+Items
+Part # QTY Description List Cost Core Total
+2019 Example Make Model
+604-970
+BDAC1267
+1 HVAC AIR DOOR AC Example Blend Door Act 
+SKU-000395135
+61.31 34.64 0.00 34.64
+773775
+895146
+2 VAL MAXLIFE DEX/ Example Trans Fluid 
+SKU-000819367
+63.06 35.63 0.00 71.26
+JLB88967 1 JL BEEF STICK T Example Beef Stick  SKU-001321989 6.85 3.19 0.00 3.19
+For assistance with Billing and Credit related issues, please contact our credit team at 866-208-3385.
+MSDS can be ordered upon request
+00000000001011526C
+Subtotal $138.13
+Tax $9.67
+AR CREDIT  0000000000000 AEKGN0 $147.80 Total Due $147.80
+AZC Savings Piece Count Page Total
+$8.47 4 1 of 1 $147.80
+cmstinvc_EN_US_3.0.6.py

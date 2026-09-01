@@ -5,7 +5,68 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 DEFAULT_SCAN_LIMIT = 15
-MAX_SCAN_LIMIT = 50
+MAX_SCAN_LIMIT = 15  # AZ API: "supporting max 15 transaction history"
+MAX_SCAN_PAGES = 40
+
+# AZ Pro UI filter dropdown values (query invoiceType=CMSTINVC, not "INVOICE").
+INVOICE_TYPE_ALIASES = {
+    "INVOICE": "CMSTINVC",
+    "SALES": "CMSTINVC",
+    "SALES INVOICE": "CMSTINVC",
+    "CMSTINVC": "CMSTINVC",
+    "RETURN": "CMSTRETN",
+    "CMSTRETN": "CMSTRETN",
+    "PAYMENT": "CMSTPAYM",
+    "CMSTPAYM": "CMSTPAYM",
+    "SUBSCRIPTION": "CMPSSUBC",
+    "CMPSSUBC": "CMPSSUBC",
+    "ADJUSTMENT": "CMPSADJS",
+    "ACCOUNT ADJUSTMENT": "CMPSADJS",
+    "CMPSADJS": "CMPSADJS",
+    "REBATE": "CMPSREBT",
+    "CMPSREBT": "CMPSREBT",
+}
+
+FILTER_TYPE_ALIASES = {
+    "INVOICE": "RENDER_ID",
+    "INVOICE_NUMBER": "RENDER_ID",
+    "INVOICE NUMBER": "RENDER_ID",
+    "NUMBER": "RENDER_ID",
+    "RENDER_ID": "RENDER_ID",
+    "PO": "PO",
+    "PO_NUMBER": "PO",
+    "PO NUMBER": "PO",
+}
+
+MONTH_NAMES = [
+    "",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+]
+
+
+def normalize_invoice_type(value: Optional[str]) -> Optional[str]:
+    s = (value or "").strip()
+    if not s or s.upper() in ("ALL", "*"):
+        return None
+    return INVOICE_TYPE_ALIASES.get(s.upper(), s.upper())
+
+
+def normalize_filter_type(value: Optional[str]) -> Optional[str]:
+    s = (value or "").strip()
+    if not s:
+        return None
+    return FILTER_TYPE_ALIASES.get(s.upper(), s.upper())
 
 
 def parse_money(value: Any) -> Optional[float]:
@@ -123,10 +184,15 @@ def parse_transaction_list(payload: Dict[str, Any], limit: int = DEFAULT_SCAN_LI
                 "amount": parse_money(row.get("totalAmt")),
                 "type": itype,
                 "status": itype,
+                "type_cd": str(row.get("invoiceTypeCD") or "") or None,
                 "store_number": str(row.get("storeNumber") or "") or None,
                 "po": po,
                 "part_number": pn,
+                "part_desc": str(row.get("partDesc") or "").strip() or None,
                 "vehicle": vehicle,
+                "summary_id": str(row.get("summaryId") or "") or None,
+                "submitted_date": str(row.get("submittedDate") or "").strip() or None,
+                "remaining_part_count": row.get("remainingPartCount"),
             }
         )
     return {
@@ -136,4 +202,49 @@ def parse_transaction_list(payload: Dict[str, Any], limit: int = DEFAULT_SCAN_LI
         "has_next_page": bool(data.get("hasNextPage")),
         "limit": cap,
         "source": "transactions",
+    }
+
+
+def parse_annual_sales(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Map GET /ecomm/b2b/v1/shops/{pin}/sales?year= JSON."""
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "invalid annual sales payload", "source": "shops/sales"}
+    src: Any = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    if not isinstance(src, dict):
+        src = {}
+    monthly_in = src.get("monthlySales") or []
+    monthly: List[Dict[str, Any]] = []
+    if isinstance(monthly_in, list):
+        for row in monthly_in:
+            if not isinstance(row, dict):
+                continue
+            try:
+                m = int(row.get("month") or 0)
+            except (TypeError, ValueError):
+                m = 0
+            monthly.append(
+                {
+                    "month": m,
+                    "label": MONTH_NAMES[m] if 1 <= m <= 12 else str(m or ""),
+                    "sales": parse_money(row.get("salesAmount")),
+                }
+            )
+    monthly.sort(key=lambda r: int(r.get("month") or 0))
+    year = src.get("year")
+    try:
+        year_i = int(year) if year is not None else None
+    except (TypeError, ValueError):
+        year_i = None
+    return {
+        "ok": True,
+        "year": year_i,
+        "total_sales": parse_money(src.get("totalSales")),
+        "update_date": src.get("updateDate") or None,
+        "monthly": monthly,
+        "excludes_core": True,
+        "note": (
+            "AZ annual sales excludes core charges; ticket-level tally_invoices "
+            "includes cores, returns, and payments."
+        ),
+        "source": "shops/sales",
     }

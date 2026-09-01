@@ -22,13 +22,17 @@ Local MCP server for **any** shop’s [AutoZone Pro](https://www.autozonepro.com
 | `get_prices` | Refresh cost/list/core/store qty |
 | `list_categories` | Top-level categories |
 | `get_credit_snapshot` | Read-only **balance**, **overdue / past-due**, **available credit** (one small call) |
-| `scan_invoices` | Bounded invoices/receipts (`limit`, last `days`) — id, date, amount, type; no PDFs |
+| `scan_invoices` | Bounded invoices/receipts (`limit` max 15, last `days`) — id, date, amount, type |
+| `get_invoice` | Download one commercial invoice/return **PDF** and parse line items (list/cost/core) |
+| `search_invoices` | Find tickets by invoice #, PO, part number, vehicle, or text |
+| `tally_invoices` | Sum tickets by day/month/year (includes cores, returns, payments) |
+| `get_annual_purchases` | Official AZ monthly sales for a calendar year (**excludes cores**) |
 | `get_shop_profile` / `set_shop_profile` | Local garage name, AutoZone store #, address (first-run) |
 | `import_browser_cookies` | **Optional local auth** from a browser you name |
 
 **Quote rule:** when building a job quote, always show **cost and list** side-by-side. Cost = what the shop pays; list = street/list.
 
-**Account (read-only):** `get_credit_snapshot` for current balance, overdue/past-due, and available credit. `scan_invoices(limit=15, days=90)` for recent invoices and payment receipts. Do **not** pay bills or save payment methods through this server.
+**Account (read-only):** `get_credit_snapshot` for current balance, overdue/past-due, and available credit. `scan_invoices(limit=15, days=90)` for recent invoices and payment receipts. `get_invoice(invoice_id)` fetches the PDF and parses parts/qty/cost/list. `search_invoices` / `tally_invoices` cover lookup and monthly/yearly totals. Do **not** pay bills or save payment methods through this server. Do **not** commit downloaded PDFs or `~/.cache/azpro-invoices`.
 
 ## Requirements
 

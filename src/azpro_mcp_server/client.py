@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 from datetime import date, timedelta
@@ -14,14 +15,26 @@ import requests
 
 from .account import (
     DEFAULT_SCAN_LIMIT,
+    MAX_SCAN_PAGES,
     _clamp_limit,
+    normalize_filter_type,
+    normalize_invoice_type,
+    parse_annual_sales,
     parse_credit_snapshot,
     parse_transaction_list,
 )
+from .invoice_parse import (
+    decode_pdf_payload,
+    invoice_date_from_id,
+    parse_invoice_pdf,
+    to_date_only,
+)
+from .invoice_tally import search_items, tally_items, year_month_window
 from .models import PartHit, PartSearchResult, VehicleSummary
 
 BASE = "https://www.autozonepro.com"
 DEFAULT_COOKIES = Path.home() / ".config" / "autozonepro_cookies.json"
+DEFAULT_INVOICE_CACHE = Path.home() / ".cache" / "azpro-invoices"
 
 
 class AzProClient:
@@ -40,6 +53,9 @@ class AzProClient:
                 "Accept": "application/json, application/vnd.oracle.resource+json, */*",
                 "Origin": self.base_url,
                 "Referer": f"{self.base_url}/ui/my-zone",
+                # AZ Pro CSRF: POSTs 400 without this (transaction PDF download).
+                "x-requested-by": "web-ui:client",
+                "AZPRO_SITE_ID": "AZPRO_US_SITE",
             }
         )
         self._inject_cookies(self.cookies)
@@ -102,6 +118,7 @@ class AzProClient:
         url = path if path.startswith("http") else f"{self.base_url}{path}"
         headers = kwargs.pop("headers", {})
         headers.setdefault("Content-Type", "application/json")
+        headers.setdefault("x-requested-by", "web-ui:client")
         return self._session.post(
             url, json=json_body, headers=headers, timeout=kwargs.pop("timeout", 25), **kwargs
         )
@@ -1112,12 +1129,19 @@ class AzProClient:
         invoice_type: Optional[str] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
+        filter_type: Optional[str] = None,
+        filter_value: Optional[str] = None,
+        page_begin_id: str = "0",
+        paginate: bool = False,
+        max_pages: int = 1,
     ) -> dict:
-        """Bounded invoice/receipt scan (transaction history). No PDFs or line items.
+        """Invoice/receipt scan (transaction history).
 
         GET /ecomm/b2b/v1/transactions with pageSize=limit (capped).
         Dates are YYYY-MM-DD. Default window is the last `days` (max 365).
-        invoice_type: INVOICE, RETURN, PAYMENT, ADJUSTMENT, REBATE (optional).
+        invoice_type: INVOICE/RETURN/PAYMENT/... (mapped to CMSTINVC etc.).
+        filter_type: RENDER_ID (invoice #) or PO; filter_value is the search string.
+        paginate=True walks hasNextPage using summaryId (capped).
         """
         t0 = time.time()
         cap = _clamp_limit(limit)
@@ -1125,7 +1149,7 @@ class AzProClient:
             days_n = int(days)
         except (TypeError, ValueError):
             days_n = 90
-        days_n = max(1, min(days_n, 365))
+        days_n = max(1, min(days_n, 365 * 3))
         try:
             self.ensure_session()
         except Exception as e:
@@ -1153,40 +1177,395 @@ class AzProClient:
             if isinstance(start_date, str) and start_date.strip()
             else (today - timedelta(days=days_n)).isoformat()
         )
-        params: Dict[str, Any] = {
-            "pin": pin,
-            "startDate": start,
-            "endDate": end,
-            "pageSize": cap,
-            "pageBeginId": "0",
-            "pageEndId": "0",
+        itype = normalize_invoice_type(invoice_type)
+        ftype = normalize_filter_type(filter_type)
+        fval = (filter_value or "").strip() or None
+        pages = max(1, min(int(max_pages or 1), MAX_SCAN_PAGES)) if paginate else 1
+        begin = (page_begin_id or "0").strip() or "0"
+        all_items: List[Dict[str, Any]] = []
+        has_next = False
+        last_error = None
+        pages_fetched = 0
+        cur_end = end
+        for _ in range(pages):
+            params: Dict[str, Any] = {
+                "pin": pin,
+                "startDate": start,
+                "endDate": cur_end,
+                "pageSize": cap,
+                "pageBeginId": begin,
+                "pageEndId": "0",
+            }
+            if itype:
+                params["invoiceType"] = itype
+            if ftype and fval:
+                params["filterType"] = ftype
+                params["filterValue"] = fval
+            r = self._get(
+                "/ecomm/b2b/v1/transactions",
+                params=params,
+                headers={"Content-Type": "application/json"},
+                timeout=30,
+            )
+            pages_fetched += 1
+            if r.status_code >= 400:
+                last_error = f"HTTP {r.status_code}: {r.text[:200]}"
+                break
+            parsed = parse_transaction_list(r.json() or {}, limit=cap)
+            chunk = parsed.get("items") or []
+            all_items.extend(chunk)
+            has_next = bool(parsed.get("has_next_page"))
+            if not paginate or not has_next or not chunk:
+                has_next = bool(parsed.get("has_next_page"))
+                break
+            last = chunk[-1]
+            begin = str(last.get("summary_id") or "") or "0"
+            nxt_end = to_date_only(last.get("date"))
+            if nxt_end:
+                cur_end = nxt_end
+            if begin in ("0", ""):
+                break
+        out = {
+            "ok": bool(all_items) and last_error is None,
+            "items": all_items,
+            "count": len(all_items),
+            "has_next_page": has_next,
+            "limit": cap,
+            "pages_fetched": pages_fetched,
+            "source": "transactions",
+            "logged_in": True,
+            "start_date": start,
+            "end_date": end,
+            "elapsed_ms": int((time.time() - t0) * 1000),
         }
-        itype = (invoice_type or "").strip().upper()
-        if itype and itype not in ("ALL", "*"):
-            params["invoiceType"] = itype
+        if last_error and not all_items:
+            out["ok"] = False
+            out["error"] = last_error
+        elif last_error:
+            out["error"] = last_error
+        return out
+
+    def _invoice_cache_dir(self) -> Path:
+        raw = os.getenv("AZPRO_INVOICE_CACHE") or str(DEFAULT_INVOICE_CACHE)
+        p = Path(raw)
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def _cache_pdf_path(self, invoice_id: str) -> Path:
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", invoice_id)[:80]
+        return self._invoice_cache_dir() / f"transaction_{safe}.pdf"
+
+    def fetch_invoice_pdf(
+        self,
+        invoice_id: str,
+        invoice_date: Optional[str] = None,
+        *,
+        parse: bool = True,
+        use_cache: bool = True,
+        pdf_path: Optional[str] = None,
+    ) -> dict:
+        """Download one commercial invoice/return PDF and optionally parse line items.
+
+        POST /ecomm/b2b/v1/transactions/download?downloadType=pdf
+        Body: {downloadType: PDF, pin, invoiceInfos: [{invoiceId, invoiceDate}]}
+        Response data is base64 PDF. Cache is local (~/.cache/azpro-invoices).
+        pdf_path reads a local file instead of (or if) download fails.
+        """
+        t0 = time.time()
+        iid = (invoice_id or "").strip()
+        local = Path(pdf_path).expanduser() if pdf_path else None
+        pdf_bytes: Optional[bytes] = None
+        from_cache = False
+        source = None
+
+        if local and local.is_file():
+            pdf_bytes = local.read_bytes()
+            source = "pdf_path"
+        elif use_cache and iid:
+            cached = self._cache_pdf_path(iid)
+            if cached.is_file():
+                pdf_bytes = cached.read_bytes()
+                from_cache = True
+                source = "cache"
+
+        if pdf_bytes is None:
+            try:
+                self.ensure_session()
+            except Exception as e:
+                return {
+                    "ok": False,
+                    "logged_in": False,
+                    "error": str(e),
+                    "elapsed_ms": int((time.time() - t0) * 1000),
+                }
+            pin = self._account_pin()
+            if not pin:
+                return {
+                    "ok": False,
+                    "error": "no account PIN on session header",
+                    "elapsed_ms": int((time.time() - t0) * 1000),
+                }
+            if not iid:
+                return {
+                    "ok": False,
+                    "error": "invoice_id required",
+                    "elapsed_ms": int((time.time() - t0) * 1000),
+                }
+            dt = to_date_only(invoice_date) or invoice_date_from_id(iid)
+            if not dt:
+                return {
+                    "ok": False,
+                    "error": "invoice_date required (YYYY-MM-DD) when it cannot be inferred",
+                    "elapsed_ms": int((time.time() - t0) * 1000),
+                }
+            r = self._post(
+                "/ecomm/b2b/v1/transactions/download?downloadType=pdf",
+                json_body={
+                    "downloadType": "PDF",
+                    "pin": pin,
+                    "invoiceInfos": [{"invoiceId": iid, "invoiceDate": dt}],
+                },
+                timeout=45,
+            )
+            if r.status_code >= 400:
+                return {
+                    "ok": False,
+                    "error": f"HTTP {r.status_code}: {r.text[:200]}",
+                    "invoice_id": iid,
+                    "invoice_date": dt,
+                    "elapsed_ms": int((time.time() - t0) * 1000),
+                }
+            try:
+                pdf_bytes = decode_pdf_payload(r.json() if r.content else {})
+            except Exception as e:
+                if r.content.startswith(b"%PDF"):
+                    pdf_bytes = r.content
+                else:
+                    return {
+                        "ok": False,
+                        "error": f"pdf decode failed: {e}",
+                        "elapsed_ms": int((time.time() - t0) * 1000),
+                    }
+            source = "download"
+            if use_cache and iid and pdf_bytes.startswith(b"%PDF"):
+                try:
+                    self._cache_pdf_path(iid).write_bytes(pdf_bytes)
+                except OSError:
+                    pass
+
+        if not pdf_bytes or not pdf_bytes.startswith(b"%PDF"):
+            return {
+                "ok": False,
+                "error": "not a PDF",
+                "elapsed_ms": int((time.time() - t0) * 1000),
+            }
+        out: Dict[str, Any] = {
+            "ok": True,
+            "logged_in": True,
+            "invoice_id": iid or None,
+            "pdf_bytes": len(pdf_bytes),
+            "from_cache": from_cache,
+            "source": source,
+            "elapsed_ms": int((time.time() - t0) * 1000),
+        }
+        if parse:
+            parsed = parse_invoice_pdf(pdf_bytes)
+            out["parsed"] = parsed
+            out["ok"] = bool(parsed.get("ok"))
+            if not parsed.get("invoice_number") and iid:
+                parsed["invoice_id"] = parsed.get("invoice_id") or iid
+        return out
+
+    def search_invoices(
+        self,
+        query: str = "",
+        invoice_type: Optional[str] = None,
+        days: int = 90,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        limit: int = 15,
+        filter_by: str = "auto",
+    ) -> dict:
+        """Search transaction history by invoice #, PO, part, vehicle, or free text."""
+        t0 = time.time()
+        q = (query or "").strip()
+        cap = _clamp_limit(limit)
+        ftype = None
+        fval = None
+        fb = (filter_by or "auto").strip().lower()
+        if fb in ("invoice", "invoice_number", "render_id") and q:
+            ftype, fval = "RENDER_ID", q
+        elif fb in ("po", "po_number") and q:
+            ftype, fval = "PO", q
+        elif fb == "auto" and q and re.fullmatch(r"\d{6,20}", q):
+            ftype, fval = "RENDER_ID", q
+        scanned = self.scan_invoices(
+            limit=50,
+            days=days,
+            invoice_type=invoice_type,
+            start_date=start_date,
+            end_date=end_date,
+            filter_type=ftype,
+            filter_value=fval,
+            paginate=True,
+            max_pages=MAX_SCAN_PAGES,
+        )
+        if scanned.get("logged_in") is False:
+            scanned["elapsed_ms"] = int((time.time() - t0) * 1000)
+            return scanned
+        items = scanned.get("items") or []
+        if q and not fval:
+            items = search_items(items, q, limit=cap)
+        elif q and fval:
+            # API filter can miss; also match locally (part # / vehicle).
+            local = search_items(scanned.get("items") or [], q, limit=cap)
+            if local:
+                items = local
+            else:
+                items = (scanned.get("items") or [])[:cap]
+        else:
+            items = items[:cap]
+        return {
+            "ok": bool(items) or scanned.get("ok"),
+            "logged_in": True,
+            "query": q,
+            "count": len(items),
+            "items": items,
+            "start_date": scanned.get("start_date"),
+            "end_date": scanned.get("end_date"),
+            "pages_fetched": scanned.get("pages_fetched"),
+            "error": scanned.get("error"),
+            "elapsed_ms": int((time.time() - t0) * 1000),
+        }
+
+    def get_annual_purchases(self, year: int) -> dict:
+        """Official AZ monthly sales for a calendar year (excludes core charges).
+
+        GET /ecomm/b2b/v1/shops/{pin}/sales?year=
+        """
+        t0 = time.time()
+        try:
+            self.ensure_session()
+        except Exception as e:
+            return {
+                "ok": False,
+                "logged_in": False,
+                "error": str(e),
+                "elapsed_ms": int((time.time() - t0) * 1000),
+            }
+        pin = self._account_pin()
+        if not pin:
+            return {
+                "ok": False,
+                "error": "no account PIN on session header",
+                "elapsed_ms": int((time.time() - t0) * 1000),
+            }
+        try:
+            year_i = int(year)
+        except (TypeError, ValueError):
+            return {
+                "ok": False,
+                "error": "year required",
+                "elapsed_ms": int((time.time() - t0) * 1000),
+            }
         r = self._get(
-            "/ecomm/b2b/v1/transactions",
-            params=params,
-            headers={"Content-Type": "application/json"},
+            f"/ecomm/b2b/v1/shops/{pin}/sales",
+            params={"year": str(year_i)},
             timeout=30,
         )
+        if r.status_code == 204:
+            parsed = parse_annual_sales(
+                {"year": year_i, "totalSales": 0, "monthlySales": [], "updateDate": ""}
+            )
+            parsed["logged_in"] = True
+            parsed["elapsed_ms"] = int((time.time() - t0) * 1000)
+            return parsed
         if r.status_code >= 400:
             return {
                 "ok": False,
-                "items": [],
-                "count": 0,
                 "error": f"HTTP {r.status_code}: {r.text[:200]}",
-                "start_date": start,
-                "end_date": end,
-                "limit": cap,
                 "elapsed_ms": int((time.time() - t0) * 1000),
             }
-        parsed = parse_transaction_list(r.json() or {}, limit=cap)
+        parsed = parse_annual_sales(r.json() or {})
         parsed["logged_in"] = True
-        parsed["start_date"] = start
-        parsed["end_date"] = end
         parsed["elapsed_ms"] = int((time.time() - t0) * 1000)
         return parsed
+
+    def tally_invoices(
+        self,
+        period: str = "month",
+        year: Optional[int] = None,
+        month: Optional[int] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        days: int = 365,
+        invoice_type: Optional[str] = None,
+        source: str = "transactions",
+    ) -> dict:
+        """Sum invoices by day/month/year.
+
+        source=annual_sales uses AZ shops/sales (cores excluded, sales only).
+        source=transactions walks ticket history (signed; includes returns/payments).
+        """
+        t0 = time.time()
+        src = (source or "transactions").strip().lower()
+        per = (period or "month").strip().lower()
+        if src in ("annual_sales", "annual", "sales"):
+            y = year or date.today().year
+            data = self.get_annual_purchases(int(y))
+            if month and data.get("monthly"):
+                rows = [m for m in data["monthly"] if int(m.get("month") or 0) == int(month)]
+                data = dict(data)
+                data["monthly"] = rows
+                data["total_sales"] = round(sum(float(m.get("sales") or 0) for m in rows), 2)
+            data["period"] = "month" if month else "year"
+            data["elapsed_ms"] = int((time.time() - t0) * 1000)
+            return data
+
+        start = start_date
+        end = end_date
+        if year:
+            ws, we = year_month_window(int(year), int(month) if month else None)
+            start = start or ws.isoformat()
+            end = end or we.isoformat()
+            days = 366
+        scanned = self.scan_invoices(
+            limit=50,
+            days=days,
+            invoice_type=invoice_type,
+            start_date=start,
+            end_date=end,
+            paginate=True,
+            max_pages=MAX_SCAN_PAGES,
+        )
+        if scanned.get("logged_in") is False:
+            scanned["elapsed_ms"] = int((time.time() - t0) * 1000)
+            return scanned
+        def _d(v):
+            if not v:
+                return None
+            try:
+                return date.fromisoformat(str(v)[:10])
+            except ValueError:
+                return None
+
+        tallied = tally_items(
+            scanned.get("items") or [],
+            period=per,
+            year=int(year) if year else None,
+            month=int(month) if month else None,
+            start=_d(start),
+            end=_d(end),
+            invoice_type=(invoice_type or "").strip().upper() or None,
+        )
+        tallied["logged_in"] = True
+        tallied["start_date"] = scanned.get("start_date")
+        tallied["end_date"] = scanned.get("end_date")
+        tallied["pages_fetched"] = scanned.get("pages_fetched")
+        tallied["ticket_count"] = scanned.get("count")
+        tallied["error"] = scanned.get("error")
+        tallied["elapsed_ms"] = int((time.time() - t0) * 1000)
+        return tallied
 
 
 def client_from_env() -> AzProClient:

@@ -101,7 +101,42 @@ class InvoiceHit(BaseModel):
     amount: Optional[float] = None
     type: Optional[str] = None
     status: Optional[str] = None
+    type_cd: Optional[str] = None
     store_number: Optional[str] = None
     po: Optional[str] = None
     part_number: Optional[str] = None
+    part_desc: Optional[str] = None
     vehicle: Optional[str] = None
+    summary_id: Optional[str] = None
+    submitted_date: Optional[str] = None
+    remaining_part_count: Optional[Any] = None
+
+
+class InvoiceLine(BaseModel):
+    part_number: Optional[str] = None
+    line_code: Optional[str] = None
+    sku: Optional[str] = None
+    qty: Optional[int] = None
+    description: Optional[str] = None
+    list_price: Optional[float] = None
+    cost: Optional[float] = None
+    core: Optional[float] = None
+    total: Optional[float] = None
+    vehicle: Optional[str] = None
+
+
+class ParsedInvoice(BaseModel):
+    kind: Optional[str] = None
+    invoice_number: Optional[str] = None
+    invoice_id: Optional[str] = None
+    original_invoice_number: Optional[str] = None
+    order_date: Optional[str] = None
+    due_date: Optional[str] = None
+    store_number: Optional[str] = None
+    vehicle: Optional[str] = None
+    lines: List[InvoiceLine] = Field(default_factory=list)
+    subtotal: Optional[float] = None
+    tax: Optional[float] = None
+    total: Optional[float] = None
+    azc_savings: Optional[float] = None
+    piece_count: Optional[int] = None

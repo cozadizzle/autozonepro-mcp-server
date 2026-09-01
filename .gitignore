@@ -58,3 +58,10 @@ alldata-screenshots/
 playwright-report/
 test-results/
 /tmp/
+
+# Real invoice PDFs / local cache (never commit shop tickets)
+transaction_*.pdf
+*.pdf
+!tests/fixtures/*.pdf
+invoice-cache/
+.invoices/
