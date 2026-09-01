@@ -123,6 +123,16 @@ def test_bootstrap_fills_empty_only(tmp_path, monkeypatch):
     assert out["city"] == "Springfield"
 
 
+def test_apply_instructions_does_not_crash(tmp_path, monkeypatch):
+    monkeypatch.setenv("AZPRO_SHOP_FILE", str(tmp_path / "shop.json"))
+    from azpro_mcp_server.server import apply_instructions, mcp
+
+    apply_instructions()
+    inner = mcp._mcp_server
+    assert inner.instructions
+    assert "Cozad" not in (inner.instructions or "")
+
+
 def test_instructions_generic_without_named_shop(tmp_path, monkeypatch):
     monkeypatch.setenv("AZPRO_SHOP_FILE", str(tmp_path / "missing.json"))
     text = build_instructions()

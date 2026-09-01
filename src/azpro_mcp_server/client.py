@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from datetime import date, timedelta
 from pathlib import Path
@@ -692,7 +693,7 @@ class AzProClient:
                 timeout=30,
             )
             if r.status_code >= 400:
-                print(f"[azpro] get_prices HTTP {r.status_code}: {r.text[:200]}")
+                print(f"[azpro] get_prices HTTP {r.status_code}: {r.text[:200]}", file=sys.stderr)
                 continue
             data = r.json() or {}
             rows = data.get("skus") if isinstance(data, dict) else data
@@ -883,7 +884,8 @@ class AzProClient:
         print(
             f"[azpro] list_group_products pg={pg!r} pos={position!r} "
             f"n={len(result.parts)} total={result.total} "
-            f"elapsed_ms={int((time.time() - t0) * 1000)}"
+            f"elapsed_ms={int((time.time() - t0) * 1000)}",
+            file=sys.stderr,
         )
         return result
 
@@ -994,7 +996,8 @@ class AzProClient:
                 print(
                     f"[azpro] search_parts q={q!r} type=PRODUCTS(via group) "
                     f"n={len(expanded.parts)} total={expanded.total} "
-                    f"elapsed_ms={int((time.time() - t0) * 1000)}"
+                    f"elapsed_ms={int((time.time() - t0) * 1000)}",
+                    file=sys.stderr,
                 )
                 return expanded
 
@@ -1026,7 +1029,8 @@ class AzProClient:
         print(
             f"[azpro] search_parts q={q!r} type={result.response_type} "
             f"n={len(parts)} total={result.total} "
-            f"elapsed_ms={int((time.time() - t0) * 1000)}"
+            f"elapsed_ms={int((time.time() - t0) * 1000)}",
+            file=sys.stderr,
         )
         return result
 
@@ -1192,9 +1196,9 @@ def client_from_env() -> AzProClient:
         p = Path(cookies_file)
         if p.is_file():
             cookies = json.loads(p.read_text(encoding="utf-8"))
-            print(f"[azpro] loaded {len(cookies)} cookies from {p}")
+            print(f"[azpro] loaded {len(cookies)} cookies from {p}", file=sys.stderr)
     except Exception as e:
-        print(f"[azpro] cookie load failed: {e}")
+        print(f"[azpro] cookie load failed: {e}", file=sys.stderr)
     raw = os.getenv("AZPRO_COOKIES")
     if cookies is None and raw:
         try:

@@ -73,7 +73,6 @@ def build_instructions() -> str:
 
 def apply_instructions() -> None:
     text = build_instructions()
-    mcp.instructions = text
     inner = getattr(mcp, "_mcp_server", None)
     if inner is not None:
         inner.instructions = text
